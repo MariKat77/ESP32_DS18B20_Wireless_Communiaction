@@ -18,6 +18,7 @@
 #endif
 #include <OneWire.h>
 #include <DallasTemperature.h>
+#include "htmlPage.h"
 
 // Data wire is connected to GPIO 4
 #define ONE_WIRE_BUS 4
@@ -27,6 +28,12 @@ OneWire oneWire(ONE_WIRE_BUS);
 
 // Pass our oneWire reference to Dallas Temperature sensor 
 DallasTemperature sensors(&oneWire);
+
+// Define numbers of pins to control valves
+#define VALVE_UP_OPEN_PIN 13
+#define VALVE_UP_CLOSE_PIN 16
+#define VALVE_DOWN_OPEN_PIN 17
+#define VALVE_DOWN_CLOSE_PIN 18
 
 //Address of temp sensors
 DeviceAddress termPZ = {0x28, 0x49, 0x51, 0xA4, 0x22, 0x22, 0x06, 0x54};
@@ -40,13 +47,26 @@ String temperatureCPp = "";
 String temperatureCParZ = "";
 String temperatureCParP = "";
 
+String setTempUp = "";
+String setTempDown = "";
+
 // Timer variables
 unsigned long lastTime = 0;  
 unsigned long timerDelay = 5000;
+unsigned long lastTimeSteerValve = 0;  
+unsigned long timerDelayValve = 10000;
+unsigned long lastTimeDurationValve = 0;  
+unsigned long timerDurationValve = 2000; //how long the valve is opening
 
 // Replace with your network credentials
 const char* ssid = "Router";
 const char* password = "1234";
+
+const char* PARAM_TEMP_UP = "tempUp";
+const char* PARAM_TEMP_DOWN = "tempDown";
+
+bool switchOffMarkerUp = false;
+bool switchOffMarkerDown = false;
 
 // Create AsyncWebServer object on port 80
 AsyncWebServer server(80);
@@ -66,111 +86,6 @@ String readDSTemperatureC(const uint8_t *addr) {
   return String(tempC);
 }
 
-
-const char index_html[] PROGMEM = R"rawliteral(
-<!DOCTYPE HTML><html lang="pl">
-<head>
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta charset="utf-8">
-  <link rel="stylesheet" href="https://use.fontawesome.com/releases/v5.7.2/css/all.css" integrity="sha384-fnmOCqbTlWIlj8LyTjo7mOUStjsKC4pOpQbqyi7RrhN7udi9RwhKkMHpvLbHG9Sr" crossorigin="anonymous">
-  <style>
-    html {
-     font-family: Arial;
-     display: inline-block;
-     margin: 0px auto;
-     text-align: center;
-    }
-    body { 
-    background-image: url('https://www.pixelstalk.net/wp-content/uploads/images6/The-best-Minimalist-Desktop-Wallpaper-HD.jpg'); 
-    background-repeat: repeat;
-    background-size: cover; 
-    }
-    h2 { font-size: 3.0rem; }
-    h3 { font-size: 2.0rem; }
-    p { font-size: 3.0rem; }
-    .units { font-size: 1.2rem; }
-    .ds-labels{
-      font-size: 1.5rem;
-      vertical-align:middle;
-      padding-bottom: 15px;
-    }
-  </style>
-</head>
-<body>
-  <h2>Temperatury zasilania i powrotów z podłogówki</h2>
-  <h3>Temperatury piętro</h3>
-  <p>
-    <i class="fas fa-thermometer-half" style="color:#f21d1d;"></i>
-    <span class="ds-labels">Temperatura zasilania </span>
-    <span id="temperaturecPz">%TEMPERATURECPZ%</span>
-    <sup class="units">&deg;C</sup>
-  </p>
-  <p>
-    <i class="fas fa-thermometer-half" style="color:#1565c0;"></i> 
-    <span class="ds-labels">Temperatura powrotu </span>
-    <span id="temperaturecPp">%TEMPERATURECPP%</span>
-    <sup class="units">&deg;C</sup>
-  </p>
-  <h3>Temperatury parter</h3>
-  <p>
-    <i class="fas fa-thermometer-half" style="color:#f21d1d;"></i>
-    <span class="ds-labels">Temperatura zasilania </span>
-    <span id="temperaturecParZ">%TEMPERATURECPARZ%</span>
-    <sup class="units">&deg;C</sup>
-  </p>
-  <p>
-    <i class="fas fa-thermometer-half" style="color:#1565c0;"></i> 
-    <span class="ds-labels">Temperatura powrotu </span>
-    <span id="temperaturecParP">%TEMPERATURECPARP%</span>
-    <sup class="units">&deg;C</sup>
-  </p>
-</body>
-<script>
-setInterval(function ( ) {
-  var xhttp = new XMLHttpRequest();
-  xhttp.onreadystatechange = function() {
-    if (this.readyState == 4 && this.status == 200) {
-      document.getElementById("temperaturecPz").innerHTML = this.responseText;
-    }
-  };
-  xhttp.open("GET", "/temperaturecPz", true);
-  xhttp.send();
-}, 2000) ;
-setInterval(function ( ) {
-  var xhttp = new XMLHttpRequest();
-  xhttp.onreadystatechange = function() {
-    if (this.readyState == 4 && this.status == 200) {
-      document.getElementById("temperaturecPp").innerHTML = this.responseText;
-    }
-  };
-  xhttp.open("GET", "/temperaturecPp", true);
-  xhttp.send();
-}, 2000) ;
-
-setInterval(function ( ) {
-  var xhttp = new XMLHttpRequest();
-  xhttp.onreadystatechange = function() {
-    if (this.readyState == 4 && this.status == 200) {
-      document.getElementById("temperaturecParZ").innerHTML = this.responseText;
-    }
-  };
-  xhttp.open("GET", "/temperaturecParZ", true);
-  xhttp.send();
-}, 2000) ;
-setInterval(function ( ) {
-  var xhttp = new XMLHttpRequest();
-  xhttp.onreadystatechange = function() {
-    if (this.readyState == 4 && this.status == 200) {
-      document.getElementById("temperaturecParP").innerHTML = this.responseText;
-    }
-  };
-  xhttp.open("GET", "/temperaturecParP", true);
-  xhttp.send();
-}, 2000) ;
-
-</script>
-</html>)rawliteral";
-
 // Replaces placeholder with DS18B20 values
 String processor(const String& var){
   //Serial.println(var);
@@ -185,6 +100,12 @@ String processor(const String& var){
   }
   else if(var == "TEMPERATURECPARP"){
     return temperatureCParP;
+  }
+  else if(var == "SET_TEMP_UP") {
+    return setTempUp;
+  }
+  else if(var == "SET_TEMP_DOWN") {
+    return setTempDown;
   }
   
   return String();
@@ -206,6 +127,9 @@ void setup(){
   temperatureCPp = readDSTemperatureC(termPP);
   temperatureCParZ = readDSTemperatureC(termParZ);
   temperatureCParP = readDSTemperatureC(termParP);
+
+  setTempUp = "25.0";
+  setTempDown = "25.0";
 
   WiFi.disconnect(true); //delete old config
   delay(1000);
@@ -233,11 +157,23 @@ void setup(){
   server.on("/temperaturecPp", HTTP_GET, [](AsyncWebServerRequest *request){
     request->send_P(200, "text/plain", temperatureCPp.c_str());
   });
-    server.on("/temperaturecParZ", HTTP_GET, [](AsyncWebServerRequest *request){
+  server.on("/temperaturecParZ", HTTP_GET, [](AsyncWebServerRequest *request){
     request->send_P(200, "text/plain", temperatureCParZ.c_str());
   });
-    server.on("/temperaturecParP", HTTP_GET, [](AsyncWebServerRequest *request){
+  server.on("/temperaturecParP", HTTP_GET, [](AsyncWebServerRequest *request){
     request->send_P(200, "text/plain", temperatureCParP.c_str());
+  });
+  server.on("/update", HTTP_GET, [] (AsyncWebServerRequest *request) {
+    // GET input1 value on <ESP_IP>/update?output=<inputMessage1>&state=<inputMessage2>
+    if (request->hasParam(PARAM_TEMP_UP) && request->hasParam(PARAM_TEMP_DOWN)) {
+      setTempUp = request->getParam(PARAM_TEMP_UP)->value();
+      setTempDown = request->getParam(PARAM_TEMP_DOWN)->value();
+    }
+    else {
+      setTempUp = "25.0";
+      setTempDown = "25.0";
+    }
+    request->send(200, "text/plain", "OK");
   });
 
   // Start server
@@ -245,12 +181,71 @@ void setup(){
 }
  
 void loop(){
-  if ((millis() - lastTime) > timerDelay) {
 
+  if ((millis() - lastTime) > timerDelay) {
     temperatureCPz = readDSTemperatureC(termPZ);
     temperatureCPp = readDSTemperatureC(termPP);
     temperatureCParZ = readDSTemperatureC(termParZ);
     temperatureCParP = readDSTemperatureC(termParP);
     lastTime = millis();
-  }  
+  } 
+
+  if ((millis() - lastTimeSteerValve) > timerDelayValve) {
+
+    if ((setTempUp.toFloat()-temperatureCPz.toFloat()) >= 1.0) {
+      digitalWrite(VALVE_UP_CLOSE_PIN, LOW);
+      digitalWrite(VALVE_UP_OPEN_PIN, HIGH);
+      switchOffMarkerUp = true;
+      Serial.println("Rozpoczecie grzania gora");
+      Serial.println(setTempUp.toFloat());
+    }
+    else if ((setTempUp.toFloat()-temperatureCPz.toFloat()) <= -1.0) {
+      digitalWrite(VALVE_UP_OPEN_PIN, LOW);
+      digitalWrite(VALVE_UP_CLOSE_PIN, HIGH);
+      switchOffMarkerUp = true;
+    }
+    else {
+      digitalWrite(VALVE_UP_OPEN_PIN, LOW);
+      digitalWrite(VALVE_UP_CLOSE_PIN, LOW);
+    }
+
+    if ((setTempDown.toFloat()-temperatureCParZ.toFloat()) >= 1.0) {
+      digitalWrite(VALVE_DOWN_CLOSE_PIN, LOW);
+      digitalWrite(VALVE_DOWN_OPEN_PIN, HIGH);
+      switchOffMarkerDown = true;
+      Serial.println("Rozpoczecie grzania dol");
+      Serial.println(setTempDown.toFloat());
+    }
+    else if ((setTempDown.toFloat()-temperatureCParZ.toFloat()) <= -1.0) {
+      digitalWrite(VALVE_DOWN_OPEN_PIN, LOW);
+      digitalWrite(VALVE_DOWN_CLOSE_PIN, HIGH);
+      switchOffMarkerDown = true;
+    }
+    else {
+      digitalWrite(VALVE_DOWN_CLOSE_PIN, LOW);
+      digitalWrite(VALVE_DOWN_OPEN_PIN, LOW);
+    }
+
+    lastTimeSteerValve = millis();
+    lastTimeDurationValve = millis();
+  }
+
+  if ((millis() - lastTimeDurationValve) > timerDurationValve) {
+    
+    if (switchOffMarkerUp == true) {
+      digitalWrite(VALVE_UP_OPEN_PIN, LOW);
+      digitalWrite(VALVE_UP_CLOSE_PIN, LOW);
+      switchOffMarkerUp = false;
+      Serial.println("Gora grzanie");
+    }
+
+    if (switchOffMarkerDown == true) {
+      digitalWrite(VALVE_DOWN_CLOSE_PIN, LOW);
+      digitalWrite(VALVE_DOWN_OPEN_PIN, LOW);
+      switchOffMarkerDown = false;
+      Serial.println("Dol grzanie");
+    }
+    
+  }
+
 }
